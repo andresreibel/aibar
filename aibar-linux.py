@@ -463,6 +463,19 @@ class ProviderCard(Gtk.Box):
                 "severity": self.payload_severity(payload),
             }))
 
+        for label in payload.get("unavailableUsageLabels") or []:
+            missing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            heading.append(Gtk.Label(label=compact_label(label), xalign=0, hexpand=True))
+            status = Gtk.Label(label="Unavailable", xalign=1)
+            status.add_css_class("notice-warning")
+            heading.append(status)
+            missing.append(heading)
+            detail = Gtk.Label(label="Usage could not be loaded. Retrying automatically.", xalign=0, wrap=True)
+            detail.add_css_class("detail-label")
+            missing.append(detail)
+            self.append(missing)
+
         if payload.get("resetCredits") is not None:
             credits = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
             credits_label = Gtk.Label(label="Reset credits", xalign=0, hexpand=True)

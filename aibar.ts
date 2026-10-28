@@ -110,6 +110,7 @@ export type BarPayload = {
     resetCreditDetails?: ResetCreditDetail[];
     updatedAt?: string;
     usageRows?: UsageRow[];
+    unavailableUsageLabels?: string[];
 };
 
 export type MenuBarSegment = {
@@ -533,6 +534,11 @@ export function normalizeBarPayload(value: unknown): BarPayload | null {
             };
         })
         : undefined;
+    const unavailableUsageLabels = Array.isArray(value.unavailableUsageLabels)
+        && value.unavailableUsageLabels.every((label) => typeof label == "string" && label.trim().length > 0)
+        ? [...new Set(value.unavailableUsageLabels as string[])]
+            .filter((label) => !usageRows?.some((row) => row.label == label))
+        : undefined;
     return {
         text,
         tooltip,
@@ -543,6 +549,7 @@ export function normalizeBarPayload(value: unknown): BarPayload | null {
         resetCredits,
         resetCreditDetails,
         usageRows,
+        unavailableUsageLabels,
         updatedAt,
     };
 }
@@ -561,6 +568,9 @@ function isErrorPayload(payload: BarPayload): boolean {
 }
 
 export function isRenderCacheCompatible(provider: Provider, payload: BarPayload): boolean {
+    if (provider == GROK_PROVIDER && isCompactEligible(payload.accessState)) {
+        return payload.unavailableUsageLabels != null;
+    }
     return provider != CODEX_PROVIDER
         || isErrorPayload(payload)
         || payload.resetCreditDetails != null;
@@ -1553,6 +1563,7 @@ export function grokUsageToPayload(
     monthlyUsage?: CursorMonthlyUsageSnapshot,
 ): BarPayload {
     const usageRows: UsageRow[] = [];
+    const unavailableUsageLabels: string[] = [];
     const tooltipLines: string[] = [];
     let cursorModelsPacing: ReturnType<typeof calcPacing> | null = null;
     if (monthlyUsage != null) {
@@ -1583,6 +1594,7 @@ export function grokUsageToPayload(
         );
     } else {
         tooltipLines.push("Cursor monthly unavailable", "Other monthly unavailable");
+        unavailableUsageLabels.push("Cursor Models (Monthly)", "Other Models (Monthly)");
     }
     if (usage == null) {
         if (monthlyUsage == null || cursorModelsPacing == null) {
@@ -1590,6 +1602,7 @@ export function grokUsageToPayload(
         }
         const cssClass = deriveCssClass(monthlyUsage.cursorModelsPct, cursorModelsPacing);
         tooltipLines.push("Week unavailable");
+        unavailableUsageLabels.push("GrokBot (Weekly)");
         return stampPayload({
             text: addProviderBadge(
                 `${cursorModelsPacing.icon} ◉${monthlyUsage.cursorModelsPct}% ⧖${cursorModelsPacing.timeElapsedPct}%`,
@@ -1600,6 +1613,7 @@ export function grokUsageToPayload(
             percentage: monthlyUsage.cursorModelsPct,
             percentageLabel: "Cursor Models (Monthly)",
             usageRows,
+            unavailableUsageLabels,
         });
     }
     const pacing = calcPacing(usage.weeklyPct, usage.weeklyResetAt, usage.weeklyWindowMs);
@@ -1628,6 +1642,7 @@ export function grokUsageToPayload(
         percentage: usage.weeklyPct,
         percentageLabel: "Weekly",
         usageRows,
+        unavailableUsageLabels,
     });
 }
 

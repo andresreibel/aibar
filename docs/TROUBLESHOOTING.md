@@ -33,6 +33,16 @@ The provider does not occupy a full usage card and its compact counter is hidden
 
 Use the normal refresh action. The provider does not occupy a full usage card and its counter stays hidden until usage returns; its status remains available from the bottom notification center. Network failures, malformed responses, unsupported organization policy, and ambiguous HTTP errors remain unavailable rather than being mislabeled as login or subscription loss.
 
+## GrokBot weekly shows `Unavailable`
+
+The Grok Bot weekly usage request failed while the monthly Cursor usage remained
+available. AIBar keeps the weekly bucket visible and does not treat the missing
+value as zero or copy a monthly percentage into it. It retries on the normal
+refresh cycle. During the
+28 October 2026 investigation, `GetSandUsageStatus` returned HTTP 503 while
+`GetCurrentPeriodUsage` succeeded. The weekly meter returns when valid usage is
+available again; reconnecting or changing a plan is not a fix for that server error.
+
 ## Claude usage returns `403`
 
 Anthropic does not document the internal OAuth usage endpoint or an individual subscription-entitlement API. AIBar therefore treats its `401`, `402`, and `403` responses as **Usage unavailable** without affecting the other providers. The documented `claude auth status` exit code distinguishes CLI login present (`0`) from absent (`1`); its observed `subscriptionType` JSON field is not documented as a fresh entitlement signal and is not used. A bare usage status is never classified as logged out or subscription expiry.

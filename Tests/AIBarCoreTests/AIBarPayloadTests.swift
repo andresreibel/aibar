@@ -65,6 +65,15 @@ import Testing
     }
 }
 
+@Test func decodesUnavailableQuotaWithoutInventingUsage() throws {
+    let data = Data(#"{"text":"S -4%","tooltip":"Week unavailable","accessState":"available","unavailableUsageLabels":["GrokBot (Weekly)"],"usageRows":[{"label":"Cursor Models (Monthly)","percentage":100,"resetText":"1d3h","severity":"warning"}]}"#.utf8)
+    let payload = try JSONDecoder().decode(AIBarPayload.self, from: data)
+    #expect(payload.unavailableUsageLabels == ["GrokBot (Weekly)"])
+    #expect(payload.usageRows.map(\.label) == ["Cursor Models (Monthly)"])
+    #expect(payload.usageRows.first?.percentage == 100)
+    #expect(AIBarPayload(text: "O", tooltip: "Week 10%").unavailableUsageLabels.isEmpty)
+}
+
 @Test func structuredRowsRemoveDuplicatedQuotaAndCreditDetail() throws {
     let data = Data(#"{"text":"O(1) ↑ ◉21% ⧖13%","tooltip":"Session unavailable\nWeek 21% · critical · reset 6d1h\nCredits 1\nUpdated: 03:51 PM","class":["critical","provider-codex"],"accessState":"available","resetCredits":1,"usageRows":[{"label":"Weekly","percentage":21,"resetText":"6d1h","severity":"critical"}]}"#.utf8)
     let payload = try JSONDecoder().decode(AIBarPayload.self, from: data)

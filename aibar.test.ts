@@ -934,7 +934,46 @@ describe("Grok provider", () => {
                 "Other Models (Monthly)",
             ]);
             expect(payload.tooltip).toContain("Week unavailable");
+            expect(payload.unavailableUsageLabels).toEqual(["GrokBot (Weekly)"]);
             expect(payload.text).toContain("◉1%");
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    test("keeps the weekly bucket through HTTP 503, caching and recovery without a false percentage", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "aibar-grok-partial-"));
+        const authPath = join(directory, "grok-auth.json");
+        const cachePath = join(directory, "grok-last-good.json");
+        await writeFile(authPath, JSON.stringify({ accessToken: "test-access-token", refreshToken: "test-refresh-token" }));
+        try {
+            const partial = await renderGrokPayload({
+                authPath, cachePath,
+                fetchImpl: async (input) => String(input).endsWith("/GetSandUsageStatus")
+                    ? Response.json({ code: "unavailable", message: "Error" }, { status: 503 })
+                    : Response.json(monthlyUsageResponse),
+            });
+            expect(partial.unavailableUsageLabels).toEqual(["GrokBot (Weekly)"]);
+            expect(partial.usageRows?.map((row) => row.percentage)).toEqual([1, 1]);
+            expect(normalizeBarPayload(JSON.parse(JSON.stringify(partial)))?.unavailableUsageLabels)
+                .toEqual(["GrokBot (Weekly)"]);
+            expect(isRenderCacheCompatible("grok", partial)).toBe(true);
+            expect(isRenderCacheCompatible("grok", { ...partial, unavailableUsageLabels: undefined })).toBe(false);
+
+            const cached = await renderGrokPayload({
+                authPath, cachePath,
+                fetchImpl: async () => { throw new Error("offline"); },
+            });
+            expect(cached.accessState).toBe("stale");
+            expect(cached.unavailableUsageLabels).toEqual(["GrokBot (Weekly)"]);
+
+            const recovered = await renderGrokPayload({
+                authPath, cachePath,
+                fetchImpl: async (input) => String(input).endsWith("/GetSandUsageStatus")
+                    ? Response.json(usageResponse) : Response.json(monthlyUsageResponse),
+            });
+            expect(recovered.unavailableUsageLabels).toEqual([]);
+            expect(recovered.usageRows?.find((row) => row.label == "GrokBot (Weekly)")?.percentage).toBe(42);
         } finally {
             await rm(directory, { recursive: true, force: true });
         }

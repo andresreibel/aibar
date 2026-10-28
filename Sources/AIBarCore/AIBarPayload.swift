@@ -122,6 +122,7 @@ public struct AIBarPayload: Decodable, Equatable, Sendable {
     public let updatedAt: String?
     public let accessState: AIBarAccessState
     public let usageRows: [AIBarUsageRow]
+    public let unavailableUsageLabels: [String]
 
     private enum CodingKeys: String, CodingKey {
         case text
@@ -134,6 +135,7 @@ public struct AIBarPayload: Decodable, Equatable, Sendable {
         case updatedAt
         case accessState
         case usageRows
+        case unavailableUsageLabels
     }
 
     public init(
@@ -146,7 +148,8 @@ public struct AIBarPayload: Decodable, Equatable, Sendable {
         resetCreditDetails: [AIBarResetCredit] = [],
         updatedAt: String? = nil,
         accessState: AIBarAccessState = .available,
-        usageRows: [AIBarUsageRow] = []
+        usageRows: [AIBarUsageRow] = [],
+        unavailableUsageLabels: [String] = []
     ) {
         self.text = text
         self.tooltip = tooltip
@@ -158,6 +161,7 @@ public struct AIBarPayload: Decodable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.accessState = accessState
         self.usageRows = usageRows
+        self.unavailableUsageLabels = unavailableUsageLabels
     }
 
     public init(from decoder: Decoder) throws {
@@ -174,6 +178,7 @@ public struct AIBarPayload: Decodable, Equatable, Sendable {
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
         accessState = try container.decode(AIBarAccessState.self, forKey: .accessState)
         usageRows = try container.decodeIfPresent([AIBarUsageRow].self, forKey: .usageRows) ?? []
+        unavailableUsageLabels = try container.decodeIfPresent([String].self, forKey: .unavailableUsageLabels) ?? []
 
         if let values = try? container.decode([String].self, forKey: .classes) {
             classes = values

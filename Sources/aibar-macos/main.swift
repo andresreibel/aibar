@@ -645,6 +645,22 @@ private struct AIBarMenu: View {
                         }
                     }
 
+                    ForEach(payload.unavailableUsageLabels, id: \.self) { label in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(compactLabel(label))
+                                    .fontWeight(.semibold)
+                                Spacer(minLength: 4)
+                                Text("Unavailable")
+                                    .foregroundStyle(cosmicOrange)
+                            }
+                            Text("Usage could not be loaded. Retrying automatically.")
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.caption2)
+                    }
+
                     if let credits = payload.resetCredits {
                         let creditUrgency = resetCreditUrgency(payload)
                         Button {
