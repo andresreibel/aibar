@@ -33,6 +33,15 @@ The provider does not occupy a full usage card and its compact counter is hidden
 
 Use the normal refresh action. The provider does not occupy a full usage card and its counter stays hidden until usage returns; its status remains available from the bottom notification center. Network failures, malformed responses, unsupported organization policy, and ambiguous HTTP errors remain unavailable rather than being mislabeled as login or subscription loss.
 
+## `Loading usage…` during refresh
+
+The full-panel loading indicator appears only before the first refresh finishes.
+Later refreshes keep the previous readings visible while the header spinner runs.
+OpenAI and Claude usage and token requests time out after 10 seconds, then use the
+existing fallback or error path. Grok keeps its separate 12-second weekly and
+25-second monthly timeouts. A slow provider can delay fresh readings but no longer
+replaces the loaded dashboard with a spinner.
+
 ## GrokBot weekly shows `Unavailable`
 
 The Grok Bot weekly usage request failed while the monthly Cursor usage remained

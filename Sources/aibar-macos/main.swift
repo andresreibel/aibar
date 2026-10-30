@@ -381,7 +381,7 @@ private struct AIBarMenu: View {
 
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
-                    if model.isRefreshing || !model.hasLoaded {
+                    if !model.hasLoaded {
                         VStack(spacing: 10) {
                             ProgressView()
                                 .controlSize(.regular)

@@ -25,6 +25,7 @@ const GROK_USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetS
 const CURSOR_MONTHLY_USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
 const GROK_WEEKLY_TIMEOUT_MS = 12_000;
 const GROK_MONTHLY_TIMEOUT_MS = 25_000;
+const PROVIDER_HTTP_TIMEOUT_MS = 10_000;
 const GROK_AUTH_ERROR = "Grok sign-in required. Sign in or reconnect Grok.";
 const GROK_WEEKLY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const GROK_LOGIN_TIMEOUT_MS = 2 * 60 * 1000;
@@ -1008,6 +1009,7 @@ async function maybeRefreshCodexToken(auth: CodexAuth): Promise<CodexAuth> {
 
     const response = await fetch("https://auth.openai.com/oauth/token", {
         method: "POST",
+        signal: AbortSignal.timeout(PROVIDER_HTTP_TIMEOUT_MS),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
@@ -1140,7 +1142,10 @@ async function fetchCodexUsageViaOAuth(): Promise<CodexUsageSnapshot> {
         headers.set("ChatGPT-Account-Id", auth.accountId);
     }
 
-    const response = await fetch(`${baseUrl}${path}`, { headers });
+    const response = await fetch(`${baseUrl}${path}`, {
+        headers,
+        signal: AbortSignal.timeout(PROVIDER_HTTP_TIMEOUT_MS),
+    });
     if (!response.ok) {
         throw new ProviderAccessError(`OAuth API ${response.status}`, {
             kind: "http_status",
@@ -1854,6 +1859,7 @@ async function maybeRefreshClaudeToken(auth: ClaudeOAuth): Promise<ClaudeOAuth> 
 
     const response = await fetch(CLAUDE_TOKEN_URL, {
         method: "POST",
+        signal: AbortSignal.timeout(PROVIDER_HTTP_TIMEOUT_MS),
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
     });
@@ -1941,6 +1947,7 @@ async function fetchClaudePayload(): Promise<BarPayload> {
     const auth = await maybeRefreshClaudeToken(loaded);
 
     const response = await fetch(CLAUDE_USAGE_URL, {
+        signal: AbortSignal.timeout(PROVIDER_HTTP_TIMEOUT_MS),
         headers: {
             Authorization: `Bearer ${auth.accessToken}`,
             "anthropic-beta": "oauth-2025-04-20",
