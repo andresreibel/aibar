@@ -38,7 +38,7 @@ Use the normal refresh action. The provider does not occupy a full usage card an
 The full-panel loading indicator appears only before the first refresh finishes.
 Later refreshes keep the previous readings visible while the header spinner runs.
 OpenAI and Claude usage and token requests time out after 10 seconds, then use the
-existing fallback or error path. Grok keeps its separate 12-second weekly and
+existing fallback or error path. Grok keeps its separate 30-second weekly and
 25-second monthly timeouts. A slow provider can delay fresh readings but no longer
 replaces the loaded dashboard with a spinner.
 
@@ -51,6 +51,11 @@ refresh cycle. During the
 28 October 2026 investigation, `GetSandUsageStatus` returned HTTP 503 while
 `GetCurrentPeriodUsage` succeeded. The weekly meter returns when valid usage is
 available again; reconnecting or changing a plan is not a fix for that server error.
+
+The same display can also mean a slow response. On 31 October 2026, the weekly
+endpoint returned valid usage after 17.6 seconds, beyond the former 12-second
+deadline. Weekly requests now allow 30 seconds; requests that still fail or time
+out keep the bucket unavailable rather than inventing a percentage.
 
 ## Claude usage returns `403`
 
