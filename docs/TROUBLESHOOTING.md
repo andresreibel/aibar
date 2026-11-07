@@ -21,9 +21,9 @@ brew install librsvg
 
 ## `Login required`
 
-Open **Notifications** from the slim control at the bottom of the dashboard and click **Login** for the provider. AIBar runs `codex login` for OpenAI, `claude auth login` for Anthropic, or its explicit SpaceXAI PKCE flow. Complete the provider flow and refresh. Its macOS menu-bar and Omarchy counter stay hidden until usage returns. **Clear notifications** hides the complete current set until its content changes.
+Open **Notifications** from the slim control at the bottom of the dashboard and click **Login** for the provider. AIBar runs `codex login` for OpenAI, `claude auth login` for Anthropic, or its explicit SpaceXSI PKCE flow. Complete the provider flow and refresh. Its macOS menu-bar and Omarchy counter stay hidden until usage returns. **Clear notifications** hides the complete current set until its content changes.
 
-SpaceXAI credentials are stored at `~/.codex/aibar/grok-auth.json` with mode `0600`. The browser opens only after the explicit **Login** action. Missing or rejected credentials show **Login required**; network and malformed-response failures do not claim that you are logged out.
+SpaceXSI credentials are stored at `~/.codex/aibar/grok-auth.json` with mode `0600`. The browser opens only after the explicit **Login** action. Missing or rejected credentials show **Login required**; network and malformed-response failures do not claim that you are logged out.
 
 ## `Subscription expired`
 

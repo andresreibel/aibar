@@ -9,7 +9,7 @@ public enum AIBarProvider: String, CaseIterable, Codable, Sendable {
         switch self {
         case .codex: "OpenAI"
         case .claude: "Anthropic"
-        case .grok: "SpaceXAI"
+        case .grok: "SpaceXSI"
         }
     }
 

@@ -41,7 +41,7 @@ except (ImportError, ValueError):
 PROVIDERS = {
     "claude": ("A", "Anthropic"),
     "codex": ("O", "OpenAI"),
-    "grok": ("S", "SpaceXAI"),
+    "grok": ("S", "SpaceXSI"),
 }
 
 ACCESS_PRESENTATION = {
