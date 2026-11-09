@@ -92,6 +92,7 @@ type UsageRow = {
     percentage: number;
     resetText: string;
     severity: "normal" | "warning" | "critical";
+    isCurrent?: boolean;
     pacing?: UsageRowPacing;
 };
 
@@ -531,6 +532,7 @@ export function normalizeBarPayload(value: unknown): BarPayload | null {
                 percentage: source.percentage as number,
                 resetText: source.resetText as string,
                 severity: source.severity as UsageRow["severity"],
+                isCurrent: typeof source.isCurrent == "boolean" ? source.isCurrent : undefined,
                 pacing,
             };
         })
@@ -569,7 +571,8 @@ function isErrorPayload(payload: BarPayload): boolean {
 }
 
 export function isRenderCacheCompatible(provider: Provider, payload: BarPayload): boolean {
-    if (provider == GROK_PROVIDER && isCompactEligible(payload.accessState)) {
+    if (payload.usageRows?.some((row) => typeof row.isCurrent != "boolean")) return false;
+    if (provider == GROK_PROVIDER && isCompactEligible(payload)) {
         return payload.unavailableUsageLabels != null;
     }
     return provider != CODEX_PROVIDER
@@ -594,8 +597,12 @@ export function compactLegacyTooltip(tooltip: string): string {
         .replace(/\n{2,}/g, "\n");
 }
 
-async function loadFreshRenderCache(provider: Provider): Promise<BarPayload | null> {
-    const parsed = await readJsonFile(renderCachePath(provider));
+export async function loadFreshRenderCache(
+    provider: Provider,
+    cachePath: string = renderCachePath(provider),
+    now: number = Date.now(),
+): Promise<BarPayload | null> {
+    const parsed = await readJsonFile(cachePath);
     if (!isRecord(parsed)) {
         return null;
     }
@@ -605,7 +612,7 @@ async function loadFreshRenderCache(provider: Provider): Promise<BarPayload | nu
         return null;
     }
     const ttl = isErrorPayload(payload) ? RENDER_CACHE_ERROR_TTL_MS : RENDER_CACHE_TTL_MS;
-    if (Date.now() - savedAtMs > ttl) {
+    if (now - savedAtMs < 0 || now - savedAtMs > ttl) {
         return null;
     }
     return {
@@ -671,6 +678,9 @@ function annotateCachedGrokPayload(payload: BarPayload, detail: string): BarPayl
     return {
         ...payload,
         accessState: "stale",
+        usageRows: payload.usageRows?.map((row) => ({ ...row, isCurrent: false })),
+        resetCredits: undefined,
+        resetCreditDetails: [],
         text: stripLegacyBarCountdown(payload.text),
         tooltip: `${compactLegacyTooltip(payload.tooltip)}\nStale · cached SpaceXSI usage\n${detail}`,
         class: mergeClasses(payload.class, "stale", "provider-grok"),
@@ -801,6 +811,7 @@ export function stampPayload(payload: BarPayload, updatedAtMs: number = Date.now
         ...payload,
         tooltip: `${payload.tooltip}\nUpdated: ${updatedTime}`,
         updatedAt: updatedAt.toISOString(),
+        usageRows: payload.usageRows?.map((row) => ({ ...row, isCurrent: row.isCurrent ?? true })),
     };
 }
 
@@ -808,6 +819,9 @@ export function annotateCachedClaudePayload(payload: BarPayload, detail: string)
     return {
         ...payload,
         accessState: "stale",
+        usageRows: payload.usageRows?.map((row) => ({ ...row, isCurrent: false })),
+        resetCredits: undefined,
+        resetCreditDetails: [],
         text: stripLegacyBarCountdown(payload.text),
         tooltip: `${compactLegacyTooltip(payload.tooltip)}\nStale · cached Anthropic usage\n${detail}`,
         class: mergeClasses(payload.class, "stale", "provider-claude"),
@@ -1986,67 +2000,52 @@ async function fetchClaudePayload(): Promise<BarPayload> {
         throw new Error("Invalid Claude usage payload");
     }
 
-    const sessionWindow = readNestedRecord(body, "five_hour");
-    const weeklyWindow = readNestedRecord(body, "seven_day");
-    if (!sessionWindow || !weeklyWindow) {
-        throw new Error("Claude usage windows missing");
-    }
-
-    const sessionPctRaw = toNumber(sessionWindow.utilization);
-    const weeklyPctRaw = toNumber(weeklyWindow.utilization);
-    const sessionResetIso = toStringValue(sessionWindow.resets_at);
-    const weeklyResetIso = toStringValue(weeklyWindow.resets_at);
-
-    if (sessionPctRaw == null || weeklyPctRaw == null) {
-        throw new Error("Claude usage percentages missing");
-    }
-
-    const sessionPct = clamp(Math.round(sessionPctRaw), 0, 100);
-    const weeklyPct = clamp(Math.round(weeklyPctRaw), 0, 100);
-    const sessionResetAt = parseEpochSecondsFromIso(sessionResetIso);
-    const weeklyResetAt = parseEpochSecondsFromIso(weeklyResetIso);
-
-    const sessionPacing = calcPacing(sessionPct, sessionResetAt, CLAUDE_SESSION_WINDOW_MS);
-    const weeklyPacing = calcPacing(weeklyPct, weeklyResetAt, CLAUDE_WEEKLY_WINDOW_MS);
-
-    const cssClass = deriveCssClass(weeklyPct, weeklyPacing);
-    const sessionSeverity = deriveCssClass(sessionPct, sessionPacing);
-    const sessionCountdown = formatCountdown(sessionResetAt);
-    const weeklyCountdown = formatCountdown(weeklyResetAt);
-
-    const payload = stampPayload({
-        text: addProviderBadge(
-            `${weeklyPacing.icon} ◉${weeklyPct}% ⧖${weeklyPacing.timeElapsedPct}%`,
-            "A"),
-        tooltip: [
-            formatQuotaRow("Session", sessionPct, sessionCountdown, sessionSeverity),
-            formatQuotaRow("Week", weeklyPct, weeklyCountdown, cssClass),
-        ].join("\n"),
-        accessState: "available",
-        class: mergeClasses(cssClass, "provider-claude"),
-        percentage: sessionPct,
-        percentageLabel: "Session",
-        usageRows: [
-            {
-                label: "Session",
-                percentage: sessionPct,
-                resetText: sessionCountdown,
-                severity: sessionSeverity == "warning" || sessionSeverity == "critical" ? sessionSeverity : "normal",
-                pacing: { expectedPercentage: sessionPacing.timeElapsedPct },
-            },
-            {
-                label: "Weekly",
-                percentage: weeklyPct,
-                resetText: weeklyCountdown,
-                severity: cssClass == "warning" || cssClass == "critical" ? cssClass : "normal",
-                pacing: { expectedPercentage: weeklyPacing.timeElapsedPct },
-            },
-        ],
-    });
-
+    const payload = claudeUsageToPayload(body);
     await saveClaudeCachedPayload(payload);
     await clearClaudeBackoff();
     return payload;
+}
+
+export function claudeUsageToPayload(body: JSONRecord): BarPayload {
+    const usageRows: UsageRow[] = [];
+    const unavailableUsageLabels: string[] = [];
+    const tooltipLines: string[] = [];
+    let primaryText = "";
+    for (const [key, label, windowMs] of [
+        ["five_hour", "Session", CLAUDE_SESSION_WINDOW_MS],
+        ["seven_day", "Weekly", CLAUDE_WEEKLY_WINDOW_MS],
+    ] as const) {
+        const window = readNestedRecord(body, key);
+        const rawPercentage = window ? toNumber(window.utilization) : null;
+        if (rawPercentage == null) {
+            unavailableUsageLabels.push(label);
+            tooltipLines.push(`${label == "Weekly" ? "Week" : label} unavailable`);
+            continue;
+        }
+        const percentage = clamp(Math.round(rawPercentage), 0, 100);
+        const resetAt = parseEpochSecondsFromIso(toStringValue(window?.resets_at));
+        const pacing = calcPacing(percentage, resetAt, windowMs);
+        const severity = deriveCssClass(percentage, pacing) || "normal";
+        const resetText = formatCountdown(resetAt);
+        primaryText = `${pacing.icon} ◉${percentage}% ⧖${pacing.timeElapsedPct}%`;
+        usageRows.push({ label, percentage, resetText, severity,
+            pacing: { expectedPercentage: pacing.timeElapsedPct } });
+        tooltipLines.push(formatQuotaRow(label == "Weekly" ? "Week" : label, percentage, resetText, severity));
+    }
+    const primary = usageRows.find((row) => row.label == "Weekly") ?? usageRows[0];
+    if (!primary) {
+        throw new Error("Claude usage percentages missing");
+    }
+    return stampPayload({
+        text: addProviderBadge(primaryText, "A"),
+        tooltip: tooltipLines.join("\n"),
+        accessState: "available",
+        class: mergeClasses(primary.severity == "normal" ? "" : primary.severity, "provider-claude"),
+        percentage: usageRows[0].percentage,
+        percentageLabel: usageRows[0].label,
+        usageRows,
+        unavailableUsageLabels,
+    });
 }
 
 function errorPayload(message: string, accessState: ProviderAccessState = "unavailable"): BarPayload {
@@ -2059,8 +2058,11 @@ function errorPayload(message: string, accessState: ProviderAccessState = "unava
 }
 
 export function weeklyPacePercentagePoints(provider: Provider, payload: BarPayload): number | null {
+    if (!isCompactEligible(payload)) {
+        return null;
+    }
     const weeklyLabel = provider == GROK_PROVIDER ? "GrokBot (Weekly)" : "Weekly";
-    const weekly = payload.usageRows?.find((row) => row.label == weeklyLabel);
+    const weekly = currentUsageRows(payload).find((row) => row.label == weeklyLabel);
     if (!weekly?.pacing) {
         return null;
     }
@@ -2124,20 +2126,31 @@ async function renderProviderPayload(provider: Provider): Promise<BarPayload> {
     return payload;
 }
 
-export function isCompactEligible(accessState: ProviderAccessState): boolean {
-    return accessState == "available" || accessState == "stale";
+export function currentUsageRows(payload: BarPayload): UsageRow[] {
+    return (payload.usageRows ?? []).filter((row) => row.isCurrent === true);
+}
+
+export function isCompactEligible(payload: BarPayload): boolean {
+    return currentUsageRows(payload).length > 0;
 }
 
 export function compactOutputPayload(payload: BarPayload): BarPayload {
-    if (isCompactEligible(payload.accessState)) {
-        return payload;
+    if (isCompactEligible(payload)) {
+        return { ...payload, usageRows: currentUsageRows(payload) };
     }
     const {
         percentage: _percentage,
         percentageLabel: _percentageLabel,
+        usageRows: _usageRows,
+        resetCredits: _resetCredits,
+        resetCreditDetails: _resetCreditDetails,
         ...compact
     } = payload;
-    return { ...compact, text: "" };
+    return {
+        ...compact,
+        text: "",
+        tooltip: payload.accessState == "stale" ? "Usage unavailable" : payload.tooltip,
+    };
 }
 
 export async function renderAllProviders(
@@ -2212,10 +2225,10 @@ export function defaultMenuBarRows(
     const rows: string[] = [];
     for (const provider of [CLAUDE_PROVIDER, CODEX_PROVIDER, GROK_PROVIDER]) {
         const entry = providers.find((candidate) => candidate.provider == provider);
-        if (!entry || !isCompactEligible(entry.payload.accessState)) {
+        if (!entry || !isCompactEligible(entry.payload)) {
             continue;
         }
-        for (const row of entry.payload.usageRows ?? []) {
+        for (const row of currentUsageRows(entry.payload)) {
             if (isDefaultMenuBarRow(row.label)) {
                 rows.push(menuBarRowKey(provider, row.label));
             }
@@ -2253,10 +2266,10 @@ export function buildMenuBar(
 
     for (const provider of [CLAUDE_PROVIDER, CODEX_PROVIDER, GROK_PROVIDER]) {
         const entry = providers.find((candidate) => candidate.provider == provider);
-        if (!entry || !isCompactEligible(entry.payload.accessState)) {
+        if (!entry || !isCompactEligible(entry.payload)) {
             continue;
         }
-        const row = chosenUsageRow(provider, entry.payload.usageRows ?? [], savedRows);
+        const row = chosenUsageRow(provider, currentUsageRows(entry.payload), savedRows);
         if (!row) {
             continue;
         }
@@ -2287,14 +2300,12 @@ export function buildMenuBar(
 export function menuBarOutputPayload(
     aggregate: AllProvidersPayload,
 ): Pick<BarPayload, "text" | "accessState"> {
-    const entries = aggregate.providers.filter(({ payload }) => isCompactEligible(payload.accessState));
+    const entries = aggregate.providers.filter(({ payload }) => isCompactEligible(payload));
     const summary = aggregate.menuBar ?? buildMenuBar(aggregate.providers, null);
 
     return {
         text: summary.text,
-        accessState: entries.some(({ payload }) => payload.accessState == "available")
-            ? "available"
-            : entries.length > 0 ? "stale" : "unavailable",
+        accessState: entries.length > 0 ? "available" : "unavailable",
     };
 }
 
@@ -2329,9 +2340,8 @@ async function main(): Promise<void> {
         const savedRows = await readMenuBarRows();
         const providers: AllProvidersPayload["providers"] = [];
         for (const provider of [CLAUDE_PROVIDER, CODEX_PROVIDER, GROK_PROVIDER]) {
-            const cached = await readJsonFile(renderCachePath(provider));
-            const payload = isRecord(cached) ? normalizeBarPayload(cached.payload) : null;
-            if (payload && isRenderCacheCompatible(provider, payload)) {
+            const payload = await loadFreshRenderCache(provider);
+            if (payload) {
                 providers.push({
                     provider,
                     weeklyPace: weeklyPacePercentagePoints(provider, payload),

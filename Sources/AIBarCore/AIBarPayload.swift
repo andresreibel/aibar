@@ -42,7 +42,7 @@ public enum AIBarAccessState: String, Codable, Sendable {
     public var statusLabel: String? {
         switch self {
         case .available: nil
-        case .stale: "Temporarily unavailable — showing cached usage"
+        case .stale: "Usage unavailable"
         case .unavailable: "Usage unavailable"
         case .loginRequired: "Login required"
         case .subscriptionExpired: "Subscription expired"
@@ -53,9 +53,6 @@ public enum AIBarAccessState: String, Codable, Sendable {
         self == .loginRequired
     }
 
-    public var isCompactEligible: Bool {
-        self == .available || self == .stale
-    }
 }
 
 public struct AIBarUsagePacing: Decodable, Equatable, Sendable {
@@ -68,6 +65,7 @@ public struct AIBarUsageRow: Decodable, Equatable, Sendable {
     public let resetText: String
     public let severity: AIBarSeverity
     public let pacing: AIBarUsagePacing?
+    public let isCurrent: Bool?
 }
 
 public struct AIBarResetCredit: Decodable, Equatable, Sendable {
@@ -189,6 +187,14 @@ public struct AIBarPayload: Decodable, Equatable, Sendable {
         }
     }
 
+    public var currentUsageRows: [AIBarUsageRow] {
+        usageRows.filter { $0.isCurrent == true }
+    }
+
+    public var staleUsageLabels: [String] {
+        usageRows.filter { $0.isCurrent != true }.map(\.label)
+    }
+
     public var severity: AIBarSeverity {
         if classes.contains("error") { return .error }
         if classes.contains("critical") { return .critical }
@@ -275,7 +281,7 @@ public struct AIBarProviderPayload: Decodable, Equatable, Sendable {
     public let payload: AIBarPayload
 
     public var isCompactEligible: Bool {
-        payload.accessState.isCompactEligible
+        !payload.currentUsageRows.isEmpty
     }
 
     public var paceText: String {
@@ -286,7 +292,7 @@ public struct AIBarProviderPayload: Decodable, Equatable, Sendable {
 
     public var weeklyUsagePercentage: Double? {
         let label = provider == .grok ? "GrokBot (Weekly)" : "Weekly"
-        return payload.usageRows.first { $0.label == label }?.percentage
+        return payload.currentUsageRows.first { $0.label == label }?.percentage
     }
 
     public var menuBarBadgeSeverity: AIBarSeverity {
@@ -315,28 +321,27 @@ public struct AIBarAggregatePayload: Decodable, Equatable, Sendable {
     }
 
     public func replacingMenuBar(_ menuBar: AIBarMenuBar) -> AIBarAggregatePayload {
-        AIBarAggregatePayload(providers: providers, menuBar: menuBar)
+        AIBarAggregatePayload(providers: providers, menuBar: menuBarSelecting(rows: menuBar.rows))
     }
 
     public func selectingMenuBarRow(provider: AIBarProvider, label: String) -> AIBarAggregatePayload {
-        replacingMenuBar(menuBarSelecting(provider: provider, label: label))
+        let rows = (menuBar?.rows ?? []) + ["\(provider.rawValue):\(label)"]
+        return AIBarAggregatePayload(providers: providers, menuBar: menuBarSelecting(rows: rows))
     }
 
-    private func menuBarSelecting(provider selectedProvider: AIBarProvider, label: String) -> AIBarMenuBar {
+    private func menuBarSelecting(rows selectedRows: [String]) -> AIBarMenuBar {
         var chosen: [AIBarProvider: String] = [:]
-        for key in menuBar?.rows ?? [] {
+        for key in selectedRows {
             guard let provider = AIBarProvider(rawValue: key.split(separator: ":", maxSplits: 1).first.map(String.init) ?? "") else {
                 continue
             }
             chosen[provider] = key
         }
-        chosen[selectedProvider] = "\(selectedProvider.rawValue):\(label)"
-
         var segments: [AIBarMenuBarSegment] = []
         var rows: [String] = []
         for provider in AIBarProvider.dashboardOrder {
             guard let entry = payload(for: provider), entry.isCompactEligible else { continue }
-            let usageRows = entry.payload.usageRows
+            let usageRows = entry.payload.currentUsageRows
             guard let row = chosenUsageRow(provider, usageRows, savedKey: chosen[provider]) else { continue }
             let paceText: String
             if let expected = row.pacing?.expectedPercentage {

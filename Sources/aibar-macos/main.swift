@@ -186,7 +186,7 @@ private final class AIBarModel: ObservableObject {
     }
 
     var statusTitle: String {
-        aggregate?.menuBarText ?? "A --  O --  S --"
+        aggregate?.menuBarText ?? "AIBar"
     }
 
     var statusTooltip: String {
@@ -252,6 +252,7 @@ private final class AIBarModel: ObservableObject {
             aggregate = next
             errorMessage = nil
         } catch {
+            aggregate = nil
             errorMessage = error.localizedDescription
         }
 
@@ -271,6 +272,7 @@ private final class AIBarModel: ObservableObject {
             try await runner.reconnect(provider)
             aggregate = try await runner.payloads()
         } catch {
+            aggregate = nil
             errorMessage = error.localizedDescription
         }
 
@@ -389,9 +391,9 @@ private struct AIBarMenu: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    } else if let aggregate = model.aggregate {
+                    } else {
                         VStack(alignment: .leading, spacing: 12) {
-                            let usageProviders = aggregate.compactEntries.map(\.provider)
+                            let usageProviders = AIBarProvider.dashboardOrder
 
                             if !usageProviders.isEmpty {
                                 let columnCount = min(usageProviders.count, max(1, Int((model.dropdownSize.width - 20) / 192)))
@@ -406,23 +408,11 @@ private struct AIBarMenu: View {
                                 }
                             }
                         }
-                    } else {
-                        Text("Usage unavailable")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                 }
                 .measureDropdownHeight()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-
-            if let errorMessage = model.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .measureDropdownHeight()
-            }
 
             if !dashboardNotices.isEmpty {
                 Button {
@@ -454,7 +444,7 @@ private struct AIBarMenu: View {
         .padding(.bottom, dashboardNotices.isEmpty ? 16 : 24)
         .frame(width: model.dropdownSize.width, height: model.dropdownSize.height, alignment: .topLeading)
         .onPreferenceChange(DropdownContentHeight.self) { height in
-            let gaps = 1 + (model.errorMessage == nil ? 0 : 1) + (dashboardNotices.isEmpty ? 0 : 1)
+            let gaps = 1 + (dashboardNotices.isEmpty ? 0 : 1)
             let padding: CGFloat = 16 + (dashboardNotices.isEmpty ? 16 : 24)
             model.dropdownPreferredHeight = ceil(height + CGFloat(gaps) * 16 + padding)
         }
@@ -474,7 +464,9 @@ private struct AIBarMenu: View {
     private var accessWarningProviders: [AIBarProvider] {
         guard let aggregate = model.aggregate else { return [] }
         return AIBarProvider.dashboardOrder.filter {
-            aggregate.payload(for: $0)?.isCompactEligible != true
+            guard let payload = aggregate.payload(for: $0)?.payload else { return true }
+            if payload.accessState == .loginRequired || payload.accessState == .subscriptionExpired { return true }
+            return payload.usageRows.isEmpty && payload.unavailableUsageLabels.isEmpty && payload.resetCredits == nil
         }
     }
 
@@ -491,13 +483,23 @@ private struct AIBarMenu: View {
             )
         }
 
+        if let errorMessage = model.errorMessage {
+            notices.append(DashboardNotice(
+                id: "refresh-error", title: "AIBar", message: errorMessage,
+                tone: .neutral, loginProvider: nil
+            ))
+        }
+
         for provider in AIBarProvider.dashboardOrder {
-            guard let payload = model.payload(for: provider)?.payload,
-                  payload.accessState.isCompactEligible else {
+            guard let payload = model.payload(for: provider)?.payload else {
                 continue
             }
             let details = providerDetails(payload.macOSDetail)
-            for quota in details.unavailableQuotas {
+            let unavailableQuotas = payload.unavailableUsageLabels.isEmpty
+                ? details.unavailableQuotas
+                : payload.unavailableUsageLabels.map(compactLabel)
+            let missingQuotas = Array(Set(unavailableQuotas + payload.staleUsageLabels.map(compactLabel))).sorted()
+            for quota in missingQuotas {
                 notices.append(DashboardNotice(
                     id: "quota-\(provider.rawValue)-\(quota)",
                     title: "\(provider.displayName) \(quota.lowercased()) usage",
@@ -609,56 +611,15 @@ private struct AIBarMenu: View {
             }
 
             if let payload {
-                if let status = payload.accessState.statusLabel {
-                    Text(status)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(accessStateColor(payload.accessState))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                let details = providerDetails(payload.macOSDetail)
-                if payload.accessState.isCompactEligible {
-                    if payload.usageRows.isEmpty {
-                        if let percentage = payload.percentage {
-                            usageRow(
-                                provider: provider,
-                                label: payload.percentageLabel ?? "Usage",
-                                percentage: percentage,
-                                resetText: nil,
-                                pacing: nil,
-                                tint: usageColor(for: payload.severity),
-                                showsSelector: false
-                            )
-                        }
-                    } else {
-                        let showsSelector = payload.usageRows.count > 1
-                        ForEach(Array(payload.usageRows.enumerated()), id: \.offset) { _, row in
-                            usageRow(
-                                provider: provider,
-                                label: row.label,
-                                percentage: row.percentage,
-                                resetText: row.resetText,
-                                pacing: row.pacing,
-                                tint: usageColor(for: row.severity),
-                                showsSelector: showsSelector
-                            )
-                        }
-                    }
-
-                    ForEach(payload.unavailableUsageLabels, id: \.self) { label in
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack {
-                                Text(compactLabel(label))
-                                    .fontWeight(.semibold)
-                                Spacer(minLength: 4)
-                                Text("Unavailable")
-                                    .foregroundStyle(cosmicOrange)
-                            }
-                            Text("Usage could not be loaded. Retrying automatically.")
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .font(.caption2)
+                if !payload.currentUsageRows.isEmpty || payload.resetCredits != nil {
+                    let rows = payload.currentUsageRows
+                    let showsSelector = rows.count > 1
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        usageRow(
+                            provider: provider, label: row.label, percentage: row.percentage,
+                            resetText: row.resetText, pacing: row.pacing,
+                            tint: usageColor(for: row.severity), showsSelector: showsSelector
+                        )
                     }
 
                     if let credits = payload.resetCredits {
@@ -725,15 +686,6 @@ private struct AIBarMenu: View {
                         }
                     }
 
-                    if !details.visible.isEmpty {
-                        Text(details.visible)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(payload.severity == .error ? Color.red : Color.secondary)
-                            .textSelection(.enabled)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
                     Spacer(minLength: 0)
 
                     if let updatedTime = payload.updatedTimeText {
@@ -741,18 +693,7 @@ private struct AIBarMenu: View {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
-                } else if payload.accessState.showsLoginAction {
-                    Button("Login") {
-                        Task { await model.reconnect(provider) }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(model.isRefreshing)
                 }
-            } else {
-                Text("Loading usage…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
             }
         }
         .padding(12)
@@ -802,14 +743,6 @@ private struct AIBarMenu: View {
         provider: AIBarProvider
     ) -> String {
         "\(provider.displayName) did not provide \(quota.lowercased()) usage, so that quota is not shown."
-    }
-
-    private func accessStateColor(_ state: AIBarAccessState) -> Color {
-        switch state {
-        case .loginRequired, .subscriptionExpired: .red
-        case .stale, .unavailable: cosmicOrange
-        case .available: .secondary
-        }
     }
 
     private func usageColor(for severity: AIBarSeverity) -> Color {
@@ -992,7 +925,6 @@ private final class AIBarAppDelegate: NSObject, NSApplicationDelegate, NSPopover
     private let popover = NSPopover()
     // Reserve the arrow before the first presentation; measure actual chrome afterward.
     private var popoverChrome = CGSize(width: 0, height: 24)
-    private var lastStatusTitle = "A --  O --  S --"
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1095,12 +1027,9 @@ private final class AIBarAppDelegate: NSObject, NSApplicationDelegate, NSPopover
     ) {
         guard let button = statusItem.button else { return }
 
-        if let aggregate {
-            lastStatusTitle = aggregate.menuBarText
-        }
         let segments = aggregate?.menuBar?.segments ?? []
         let title = segments.isEmpty
-            ? (aggregate?.menuBarText ?? lastStatusTitle)
+            ? (aggregate?.menuBarText ?? "AIBar")
             : segments.map(\.text).joined(separator: "  ")
         let baseFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let attributedTitle = NSMutableAttributedString(

@@ -7,6 +7,7 @@ import {
     annotateCachedClaudePayload,
     calcPacing,
     classifyProviderAccess,
+    claudeUsageToPayload,
     codexUsageToPayload,
     compactLegacyTooltip,
     codexExecutableCandidates,
@@ -22,6 +23,7 @@ import {
     isRenderCacheCompatible,
     menuBarOutputPayload,
     loginGrok,
+    loadFreshRenderCache,
     nextProvider,
     normalizeBarPayload,
     parseCodexOAuthUsage,
@@ -74,7 +76,7 @@ describe("combined provider pacing", () => {
             label,
             percentage: actual,
             resetText: "1d",
-            severity: "normal" as const,
+            severity: "normal" as const, isCurrent: true,
             pacing: { expectedPercentage: expected },
         }],
     });
@@ -231,14 +233,42 @@ describe("Claude stale fallback", () => {
                 label: "Weekly",
                 percentage: 42,
                 resetText: "2d",
-                severity: "normal" as const,
+                severity: "normal" as const, isCurrent: true,
             }],
         };
         const stale = annotateCachedClaudePayload(cached, "Live fetch failed.");
 
         expect(stale.accessState).toBe("stale");
-        expect(stale.usageRows).toEqual(cached.usageRows);
+        expect(stale.usageRows).toEqual(cached.usageRows.map((row) => ({ ...row, isCurrent: false })));
         expect(stale.tooltip).toContain("Stale · cached Anthropic usage");
+    });
+});
+
+describe("Claude partial current usage", () => {
+    const session = { utilization: 12, resets_at: "2026-11-10T10:00:00Z" };
+    const weekly = { utilization: 17, resets_at: "2026-11-12T10:00:00Z" };
+
+    test("keeps either current quota when the other is missing or invalid", () => {
+        for (const missing of [null, { utilization: "invalid" }]) {
+            const sessionOnly = claudeUsageToPayload({ five_hour: session, seven_day: missing });
+            expect(sessionOnly.accessState).toBe("available");
+            expect(sessionOnly.usageRows?.map(({ label, percentage }) => ({ label, percentage })))
+                .toEqual([{ label: "Session", percentage: 12 }]);
+            expect(sessionOnly.unavailableUsageLabels).toEqual(["Weekly"]);
+            const weeklyOnly = claudeUsageToPayload({ five_hour: missing, seven_day: weekly });
+            expect(weeklyOnly.usageRows?.map(({ label, percentage }) => ({ label, percentage })))
+                .toEqual([{ label: "Weekly", percentage: 17 }]);
+            expect(weeklyOnly.unavailableUsageLabels).toEqual(["Session"]);
+        }
+    });
+
+    test("preserves both valid quotas and rejects a response with no usage", () => {
+        const payload = claudeUsageToPayload({ five_hour: session, seven_day: weekly });
+        expect(payload.usageRows?.map((row) => row.percentage)).toEqual([12, 17]);
+        expect(payload.percentage).toBe(12);
+        expect(payload.percentageLabel).toBe("Session");
+        expect(payload.unavailableUsageLabels).toEqual([]);
+        expect(() => claudeUsageToPayload({})).toThrow("Claude usage percentages missing");
     });
 });
 
@@ -295,7 +325,7 @@ describe("menu bar pool selection", () => {
                     label: "Weekly",
                     percentage: 78,
                     resetText: "1d",
-                    severity: "warning" as const,
+                    severity: "warning" as const, isCurrent: true,
                     pacing: { expectedPercentage: 76 },
                 }],
             },
@@ -311,21 +341,21 @@ describe("menu bar pool selection", () => {
                         label: "Cursor Models (Monthly)",
                         percentage: 88,
                         resetText: "4d",
-                        severity: "warning" as const,
+                        severity: "warning" as const, isCurrent: true,
                         pacing: { expectedPercentage: 87 },
                     },
                     {
                         label: "Other Models (Monthly)",
                         percentage: 100,
                         resetText: "4d",
-                        severity: "critical" as const,
+                        severity: "critical" as const, isCurrent: true,
                         pacing: { expectedPercentage: 87 },
                     },
                     {
                         label: "GrokBot (Weekly)",
                         percentage: 20,
                         resetText: "1d",
-                        severity: "normal" as const,
+                        severity: "normal" as const, isCurrent: true,
                         pacing: { expectedPercentage: 84 },
                     },
                 ],
@@ -363,7 +393,7 @@ describe("menu bar pool selection", () => {
                     label: "Weekly",
                     percentage: 96,
                     resetText: "1d",
-                    severity: "warning",
+                    severity: "warning", isCurrent: true,
                     pacing: { expectedPercentage: 95 },
                 }],
             },
@@ -495,7 +525,7 @@ describe("Codex render-cache compatibility", () => {
                 percentage: 10,
                 resetText: "2d",
                 resetAt: 1_800_000_000,
-                severity: "normal",
+                severity: "normal", isCurrent: true,
             }],
         });
 
@@ -503,7 +533,7 @@ describe("Codex render-cache compatibility", () => {
             { title: "Full reset", expiresAt: 1_800_000_000 },
         ]);
         expect(normalized?.usageRows).toEqual([
-            { label: "Weekly", percentage: 10, resetText: "2d", severity: "normal" },
+            { label: "Weekly", percentage: 10, resetText: "2d", severity: "normal", isCurrent: true },
         ]);
     });
 
@@ -528,35 +558,57 @@ describe("Codex render-cache compatibility", () => {
 });
 
 describe("compact provider output", () => {
-    test("omits providers without current or cached usage without discarding dashboard data", () => {
-        for (const accessState of ["available", "stale"] as const) {
+    test("selects current rows independently of provider status", () => {
+        for (const accessState of ["available", "stale", "unavailable"] as const) {
             const payload = {
-                text: "A 42%",
-                tooltip: "sanitized",
-                accessState,
-                percentage: 42,
-                percentageLabel: "Weekly",
+                text: "A 42%", tooltip: "sanitized", accessState,
+                usageRows: [
+                    { label: "Session", percentage: 12, resetText: "2h", severity: "normal" as const, isCurrent: false },
+                    { label: "Weekly", percentage: 42, resetText: "2d", severity: "normal" as const, isCurrent: true },
+                ],
             };
-            expect(isCompactEligible(accessState)).toBe(true);
-            expect(compactOutputPayload(payload)).toEqual(payload);
+            expect(isCompactEligible(payload)).toBe(true);
+            expect(compactOutputPayload(payload).usageRows?.map((row) => row.label)).toEqual(["Weekly"]);
+            const stale = { ...payload, usageRows: payload.usageRows.map((row) => ({ ...row, isCurrent: false })), percentage: 42 };
+            expect(isCompactEligible(stale)).toBe(false);
+            expect(compactOutputPayload(stale).text).toBe("");
+            expect(compactOutputPayload(stale)).not.toHaveProperty("percentage");
+            expect(compactOutputPayload(stale)).not.toHaveProperty("usageRows");
         }
-        for (const accessState of ["unavailable", "login_required", "subscription_expired"] as const) {
-            const compact = compactOutputPayload({
+    });
+});
+
+describe("current usage only", () => {
+    test("hides stale counters and restores them after a successful fetch", async () => {
+        for (const accessState of ["available", "stale", "available"] as const) {
+            const result = await renderAllProviders(async () => ({
                 text: "A 42%",
-                tooltip: "sanitized",
+                tooltip: "Week 42%",
                 accessState,
-                percentage: 42,
-                percentageLabel: "Weekly",
-            });
-            expect(isCompactEligible(accessState)).toBe(false);
-            expect(compact.text).toBe("");
-            expect(compact.tooltip).toBe("sanitized");
-            expect(compact.accessState).toBe(accessState);
-            expect(compact).not.toHaveProperty("percentage");
-            expect(compact).not.toHaveProperty("percentageLabel");
+                usageRows: [{ label: "Weekly", percentage: 42, resetText: "2d", severity: "normal", isCurrent: accessState == "available",
+                    pacing: { expectedPercentage: 50 } }],
+            }));
+            expect(result.providers[0]?.weeklyPace).toBe(accessState == "available" ? 8 : null);
+            expect(result.menuBar?.text).toBe(accessState == "available" ? "A +8%  O +8%  S +8%" : "AIBar");
+            expect(menuBarOutputPayload(result).accessState).toBe(accessState == "available" ? "available" : "unavailable");
         }
     });
 
+    test("rejects expired render caches, including menu-bar selection reads", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "aibar-render-age-"));
+        const cachePath = join(directory, "render-claude.json");
+        const now = Date.now();
+        const payload = { text: "A", tooltip: "Week 42%", accessState: "available" };
+        try {
+            for (const age of [0, 300_000, 300_001, -1]) {
+                await writeFile(cachePath, JSON.stringify({ savedAtMs: now - age, payload }));
+                expect(await loadFreshRenderCache("claude", cachePath, now))
+                    .toEqual(age >= 0 && age <= 300_000 ? payload : null);
+            }
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
 });
 
 describe("codexUsageToPayload", () => {
@@ -609,7 +661,7 @@ describe("codexUsageToPayload", () => {
         expect(payload.usageRows[0]).toMatchObject({
             label: "Session",
             percentage: 12,
-            severity: "critical",
+            severity: "critical", isCurrent: true,
         });
     });
 
@@ -786,10 +838,11 @@ describe("Grok provider", () => {
             label: row.label,
             percentage: row.percentage,
             severity: row.severity,
+            isCurrent: row.isCurrent,
         }))).toEqual([
-            { label: "Cursor Models (Monthly)", percentage: 1, severity: "normal" },
-            { label: "Other Models (Monthly)", percentage: 1, severity: "normal" },
-            { label: "GrokBot (Weekly)", percentage: 42, severity: "normal" },
+            { label: "Cursor Models (Monthly)", percentage: 1, severity: "normal", isCurrent: true },
+            { label: "Other Models (Monthly)", percentage: 1, severity: "normal", isCurrent: true },
+            { label: "GrokBot (Weekly)", percentage: 42, severity: "normal", isCurrent: true },
         ]);
         expect(enrichedPayload.text).toBe(payload.text);
         expect(enrichedPayload.percentageLabel).toBe("Weekly");

@@ -63,7 +63,7 @@ Anthropic does not document the internal OAuth usage endpoint or an individual s
 
 ## Cached Claude usage
 
-During temporary Claude failures or `429` backoff, AIBar reuses the last valid Claude payload and shows **Temporarily unavailable — showing cached usage**. Cache and backoff state live under `~/.codex/aibar/`.
+During temporary provider failures or Claude `429` backoff, AIBar keeps the provider card and name, hides stale usage rows and removes the affected menu-bar counter. If another quota is current, it stays visible. Open **Notifications** for the **Usage unavailable** notice. Unavailable individual quotas also appear there, without hiding other current quotas. A successful refresh restores usage and removes the notice. Normal five-minute polling and render caching remain; last-good fallback data is never displayed after a failed fetch. Cache and backoff state live under `~/.codex/aibar/`.
 
 ## Reset credit expiry notices
 

@@ -46,7 +46,7 @@ PROVIDERS = {
 
 ACCESS_PRESENTATION = {
     "available": (None, False, False),
-    "stale": ("Temporarily unavailable — showing cached usage", False, False),
+    "stale": ("Usage unavailable", False, False),
     "unavailable": ("Usage unavailable", False, False),
     "login_required": ("Login required", True, True),
     "subscription_expired": ("Subscription expired", False, True),
@@ -250,10 +250,6 @@ popover.notification-popover > contents {
   color: #a1a1aa;
   font-size: 12px;
 }
-.error-banner {
-  color: #f7768e;
-  font-size: 11px;
-}
 """
 
 
@@ -383,7 +379,6 @@ class ProviderCard(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.provider = provider
         self.reconnect = reconnect
-        self.compact = False
         self.menu_bar_rows = set()
         self.menu_bar_group = None
         self.on_menu_bar_toggle = None
@@ -401,10 +396,8 @@ class ProviderCard(Gtk.Box):
 
     def render(self, entry, menu_bar_rows=None, on_menu_bar_toggle=None):
         self.clear()
-        self.compact = False
         self.menu_bar_rows = set(menu_bar_rows or [])
         self.on_menu_bar_toggle = on_menu_bar_toggle
-        self.remove_css_class("access-card")
         self.add_css_class("provider-card")
         self.set_vexpand(True)
         badge, name = PROVIDERS[self.provider]
@@ -419,62 +412,16 @@ class ProviderCard(Gtk.Box):
         self.append(header)
 
         if entry is None:
-            loading = Gtk.Label(label="Loading usage…", xalign=0)
-            loading.add_css_class("detail-label")
-            self.append(loading)
-            self.append(Gtk.Box(vexpand=True))
             return
 
         payload = entry.get("payload") or {}
-        rows = payload.get("usageRows") or []
-        access_state = payload.get("accessState")
-        access_label, shows_login, critical_access = ACCESS_PRESENTATION.get(
-            access_state,
-            ACCESS_PRESENTATION["unavailable"],
-        )
-        if access_label:
-            status = Gtk.Label(label=access_label, xalign=0, wrap=True)
-            status.add_css_class("access-status")
-            if critical_access:
-                status.add_css_class("access-status-critical")
-            self.append(status)
-        if access_state not in ("available", "stale"):
-            self.compact = True
-            self.remove_css_class("provider-card")
-            self.add_css_class("access-card")
-            self.set_vexpand(False)
-            if shows_login:
-                button = Gtk.Button(label="Login")
-                button.add_css_class("reconnect-button")
-                button.connect("clicked", lambda _button: self.reconnect(self.provider))
-                self.append(button)
-            return
-
+        rows = [row for row in payload.get("usageRows") or [] if row.get("isCurrent") is True]
 
         self.menu_bar_group = None
         show_selector = len(rows) > 1
         if rows:
             for row in rows:
                 self.append(self.usage_row(row, show_selector))
-        elif payload.get("percentage") is not None:
-            self.append(self.usage_row({
-                "label": payload.get("percentageLabel") or "Usage",
-                "percentage": payload["percentage"],
-                "severity": self.payload_severity(payload),
-            }))
-
-        for label in payload.get("unavailableUsageLabels") or []:
-            missing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-            heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-            heading.append(Gtk.Label(label=compact_label(label), xalign=0, hexpand=True))
-            status = Gtk.Label(label="Unavailable", xalign=1)
-            status.add_css_class("notice-warning")
-            heading.append(status)
-            missing.append(heading)
-            detail = Gtk.Label(label="Usage could not be loaded. Retrying automatically.", xalign=0, wrap=True)
-            detail.add_css_class("detail-label")
-            missing.append(detail)
-            self.append(missing)
 
         if payload.get("resetCredits") is not None:
             credits = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -491,30 +438,12 @@ class ProviderCard(Gtk.Box):
             credits.append(credits_value)
             self.append(credits)
 
-        detail, _unavailable_quotas = provider_details(payload)
-        if detail and access_state not in ("login_required", "subscription_expired"):
-            detail_label = Gtk.Label(label=detail, xalign=0, wrap=True)
-            detail_label.set_lines(3)
-            detail_label.add_css_class("detail-label")
-            if self.payload_severity(payload) == "error":
-                detail_label.add_css_class("detail-error")
-            self.append(detail_label)
-
-
         self.append(Gtk.Box(vexpand=True))
         timestamp = updated_text(payload.get("updatedAt"))
-        if timestamp:
+        if timestamp and (rows or payload.get("resetCredits") is not None):
             updated = Gtk.Label(label=f"Updated {timestamp}", xalign=0)
             updated.add_css_class("updated-label")
             self.append(updated)
-
-    @staticmethod
-    def payload_severity(payload):
-        classes = payload.get("class")
-        if isinstance(classes, str):
-            classes = [classes]
-        classes = classes or []
-        return next((value for value in ("error", "critical", "warning", "stale") if value in classes), "normal")
 
     def usage_row(self, row, show_selector=False):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
@@ -631,6 +560,7 @@ class DashboardWindow(Gtk.ApplicationWindow):
         self.cards = {}
         self.refreshing = False
         self.has_payload = False
+        self.error_message = None
         try:
             self.dismissed_notification_signature = NOTIFICATION_DISMISSAL_PATH.read_text().strip()
         except OSError:
@@ -708,11 +638,6 @@ class DashboardWindow(Gtk.ApplicationWindow):
         self.content_stack.set_visible_child_name("loading")
         root.append(self.content_stack)
 
-        self.error_label = Gtk.Label(xalign=0, wrap=True)
-        self.error_label.add_css_class("error-banner")
-        self.error_label.set_visible(False)
-        root.append(self.error_label)
-
         self.notification_button = Gtk.MenuButton()
         self.notification_button.set_hexpand(True)
         self.notification_button.add_css_class("notification-button")
@@ -754,7 +679,6 @@ class DashboardWindow(Gtk.ApplicationWindow):
             return
         self.refreshing = True
         self.refresh_button.set_sensitive(False)
-        self.error_label.set_visible(False)
         if show_loading:
             self.loading_label.set_label("Loading usage…")
             self.loading_spinner.start()
@@ -809,21 +733,32 @@ class DashboardWindow(Gtk.ApplicationWindow):
             state = payload.get("accessState")
             if state not in ACCESS_PRESENTATION:
                 state = "unavailable"
-            if state not in ("available", "stale"):
+            no_usage_items = (
+                not payload.get("usageRows")
+                and not payload.get("unavailableUsageLabels")
+                and payload.get("resetCredits") is None
+            )
+            if state in ("login_required", "subscription_expired") or no_usage_items:
                 _badge, name = PROVIDERS[provider]
                 notices.append({
                     "tone": "critical" if ACCESS_PRESENTATION[state][2] else "neutral",
                     "title": name,
-                    "message": ACCESS_PRESENTATION[state][0],
+                    "message": ACCESS_PRESENTATION[state][0] or "Usage unavailable",
                     "login_provider": provider if ACCESS_PRESENTATION[state][1] else None,
                 })
 
         for provider in PROVIDERS:
             entry = entries.get(provider) or {}
             payload = entry.get("payload") or {}
-            if payload.get("accessState") not in ("available", "stale"):
-                continue
             _detail, unavailable_quotas = provider_details(payload)
+            if payload.get("unavailableUsageLabels"):
+                unavailable_quotas = [compact_label(label) for label in payload["unavailableUsageLabels"]]
+            stale_quotas = [
+                compact_label(row["label"])
+                for row in payload.get("usageRows") or []
+                if row.get("isCurrent") is not True
+            ]
+            unavailable_quotas = sorted(set(unavailable_quotas + stale_quotas))
             _badge, name = PROVIDERS[provider]
             for quota in unavailable_quotas:
                 notices.append({
@@ -844,6 +779,12 @@ class DashboardWindow(Gtk.ApplicationWindow):
                     "message": expiry_text(detail.get("expiresAt")),
                     "login_provider": None,
                 })
+
+        if self.error_message:
+            notices = [{
+                "tone": "neutral", "title": "AIBar", "message": self.error_message,
+                "login_provider": None,
+            }]
 
         signature = json.dumps(notices, sort_keys=True, separators=(",", ":"))
         self.current_notification_signature = signature
@@ -939,6 +880,7 @@ class DashboardWindow(Gtk.ApplicationWindow):
         self.update_notification_center(self.latest_entries)
 
     def finish_refresh(self, aggregate):
+        self.error_message = None
         providers = aggregate.get("providers") or []
         menu_bar = aggregate.get("menuBar") if isinstance(aggregate.get("menuBar"), dict) else {}
         self.menu_bar_rows = list(menu_bar.get("rows") or [])
@@ -954,16 +896,13 @@ class DashboardWindow(Gtk.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def render_cards(self):
-        usage_count = 0
         for provider, card in self.cards.items():
             parent = card.get_parent()
             if parent is not None:
                 parent.remove(card)
             card.render(self.latest_entries.get(provider), self.menu_bar_rows, self.toggle_menu_bar_row)
-            if not card.compact:
-                self.usage_cards.append(card)
-                usage_count += 1
-        self.usage_cards.set_visible(usage_count > 0)
+            self.usage_cards.append(card)
+        self.usage_cards.set_visible(True)
 
     def toggle_menu_bar_row(self, provider, label):
         if self.menu_bar_updating:
@@ -1004,13 +943,14 @@ class DashboardWindow(Gtk.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def finish_error(self, message):
-        self.error_label.set_label(message)
-        self.error_label.set_visible(True)
+        self.error_message = message
+        self.latest_entries = {}
+        self.menu_bar_rows = []
+        self.has_payload = False
+        self.update_notification_center({})
+        self.render_cards()
         self.loading_spinner.stop()
-        if self.has_payload:
-            self.content_stack.set_visible_child_name("cards")
-        else:
-            self.loading_label.set_label("Usage unavailable")
+        self.content_stack.set_visible_child_name("cards")
         self.refreshing = False
         self.refresh_button.set_sensitive(True)
         return GLib.SOURCE_REMOVE
