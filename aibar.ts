@@ -1681,21 +1681,18 @@ function grokUsageRequest(accessToken: string, timeoutMs: number): RequestInit {
 export async function fetchGrokPayload(dependencies: GrokUsageDependencies = {}): Promise<BarPayload> {
     const credentials = await loadGrokCredentials(dependencies.authPath ?? GROK_AUTH_PATH);
     const fetchImpl = dependencies.fetchImpl ?? fetch;
-    const weeklyPromise = fetchImpl(
-        dependencies.usageUrl ?? GROK_USAGE_URL,
-        grokUsageRequest(credentials.accessToken, GROK_WEEKLY_TIMEOUT_MS),
-    );
-    const monthlyPromise = fetchImpl(
-        dependencies.monthlyUsageUrl ?? CURSOR_MONTHLY_USAGE_URL,
-        grokUsageRequest(credentials.accessToken, GROK_MONTHLY_TIMEOUT_MS),
-    );
+    const [weeklyResult, monthlyResult] = await Promise.allSettled([
+        fetchImpl(
+            dependencies.usageUrl ?? GROK_USAGE_URL,
+            grokUsageRequest(credentials.accessToken, GROK_WEEKLY_TIMEOUT_MS),
+        ),
+        fetchImpl(
+            dependencies.monthlyUsageUrl ?? CURSOR_MONTHLY_USAGE_URL,
+            grokUsageRequest(credentials.accessToken, GROK_MONTHLY_TIMEOUT_MS),
+        ),
+    ]);
 
-    let weeklyResponse: Response | null = null;
-    try {
-        weeklyResponse = await weeklyPromise;
-    } catch {
-        weeklyResponse = null;
-    }
+    const weeklyResponse = weeklyResult.status == "fulfilled" ? weeklyResult.value : null;
     if (weeklyResponse?.status == 401) {
         throw new ProviderAccessError(GROK_AUTH_ERROR, {
             kind: "http_status",
@@ -1706,9 +1703,8 @@ export async function fetchGrokPayload(dependencies: GrokUsageDependencies = {})
 
     let monthlyUsage: CursorMonthlyUsageSnapshot | undefined;
     try {
-        const monthlyResponse = await monthlyPromise;
-        if (monthlyResponse.ok) {
-            monthlyUsage = parseCursorMonthlyUsage(await monthlyResponse.json());
+        if (monthlyResult.status == "fulfilled" && monthlyResult.value.ok) {
+            monthlyUsage = parseCursorMonthlyUsage(await monthlyResult.value.json());
         }
     } catch {
         // Monthly Cursor usage is optional when weekly Grok usage is present.

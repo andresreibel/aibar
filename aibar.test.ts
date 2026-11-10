@@ -937,6 +937,76 @@ describe("Grok provider", () => {
         }
     });
 
+    test.each([
+        { weekly: "ok", monthly: "fail", monthlyFirst: true },
+        { weekly: "fail", monthly: "ok", monthlyFirst: false },
+        { weekly: "fail", monthly: "fail", monthlyFirst: true },
+        { weekly: "fail", monthly: "fail", monthlyFirst: false },
+        { weekly: "auth", monthly: "fail", monthlyFirst: true },
+        { weekly: "auth", monthly: "fail", monthlyFirst: false },
+    ])("isolates SpaceXSI request failures (%p)", async (scenario) => {
+        const directory = await mkdtemp(join(tmpdir(), "aibar-grok-timeout-"));
+        const authPath = join(directory, "grok-auth.json");
+        await writeFile(authPath, JSON.stringify({
+            accessToken: "test-access-token",
+            refreshToken: "test-refresh-token",
+        }));
+
+        try {
+            const script = `
+                import { renderAllProviders, renderGrokPayload, stampPayload } from ${JSON.stringify(new URL("./aibar.ts", import.meta.url).href)};
+                const scenario = ${JSON.stringify(scenario)};
+                const aggregate = await renderAllProviders(async (provider) => {
+                    if (provider !== "grok") {
+                        return stampPayload({
+                            text: "healthy", tooltip: "healthy", accessState: "available",
+                            usageRows: [{ label: "Weekly", percentage: 20, resetText: "1d", severity: "normal" }],
+                        });
+                    }
+                    return renderGrokPayload({
+                        authPath: ${JSON.stringify(authPath)},
+                        cachePath: ${JSON.stringify(join(directory, "last-good.json"))},
+                        fetchImpl: async (input) => {
+                            const monthly = String(input).endsWith("/GetCurrentPeriodUsage");
+                            await Bun.sleep(monthly === scenario.monthlyFirst ? 5 : 50);
+                            const outcome = monthly ? scenario.monthly : scenario.weekly;
+                            if (outcome === "fail") throw new Error("simulated timeout");
+                            if (outcome === "auth") return new Response(null, { status: 401 });
+                            return Response.json(monthly ? ${JSON.stringify(monthlyUsageResponse)} : ${JSON.stringify(usageResponse)});
+                        },
+                    });
+                });
+                console.log(JSON.stringify(aggregate));
+            `;
+            const child = Bun.spawn([process.execPath, "--eval", script], {
+                stdout: "pipe",
+                stderr: "pipe",
+            });
+            const [exitCode, output, errors] = await Promise.all([
+                child.exited,
+                new Response(child.stdout).text(),
+                new Response(child.stderr).text(),
+            ]);
+            expect(errors).toBe("");
+            expect(exitCode).toBe(0);
+            const aggregate = JSON.parse(output);
+            expect(aggregate.providers.map((row: { provider: string }) => row.provider)).toEqual(["claude", "codex", "grok"]);
+            for (const entry of aggregate.providers.slice(0, 2)) {
+                expect(entry.payload.accessState).toBe("available");
+                expect(entry.payload.usageRows[0].isCurrent).toBe(true);
+            }
+            const payload = aggregate.providers[2].payload;
+            const state = scenario.weekly === "auth" ? "login_required"
+                : scenario.weekly === "fail" && scenario.monthly === "fail" ? "unavailable" : "available";
+            expect(payload.accessState).toBe(state);
+            const labels = state !== "available" ? [] : scenario.weekly === "ok"
+                ? ["GrokBot (Weekly)"] : ["Cursor Models (Monthly)", "Other Models (Monthly)"];
+            expect((payload.usageRows ?? []).map((row: { label: string }) => row.label)).toEqual(labels);
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     test("keeps weekly Grok usage when optional monthly usage is unavailable", async () => {
         const directory = await mkdtemp(join(tmpdir(), "aibar-grok-monthly-"));
         const authPath = join(directory, "grok-auth.json");
