@@ -2057,6 +2057,24 @@ export function parseClaudeResetCreditDetails(body: JSONRecord): ResetCreditDeta
     });
 }
 
+// Model-scoped weekly limits, such as Fable, count inside the all-models weekly limit, so they get no pacing.
+function claudeModelShareRows(body: JSONRecord): UsageRow[] {
+    const limits = Array.isArray(body.limits) ? body.limits : [];
+    return limits.flatMap((limit): UsageRow[] => {
+        if (!isRecord(limit) || limit.kind != "weekly_scoped") return [];
+        const model = readNestedRecord(readNestedRecord(limit, "scope") ?? {}, "model");
+        const name = toStringValue(model?.display_name)?.trim();
+        const rawPercentage = toNumber(limit.percent);
+        if (!name || rawPercentage == null) return [];
+        return [{
+            label: `${name} (of weekly)`,
+            percentage: clamp(Math.round(rawPercentage), 0, 100),
+            resetText: formatCountdown(parseEpochSecondsFromIso(toStringValue(limit.resets_at))),
+            severity: "normal",
+        }];
+    });
+}
+
 export function claudeUsageToPayload(body: JSONRecord): BarPayload {
     const usageRows: UsageRow[] = [];
     const unavailableUsageLabels: string[] = [];
@@ -2087,6 +2105,7 @@ export function claudeUsageToPayload(body: JSONRecord): BarPayload {
     if (!primary) {
         throw new Error("Claude usage percentages missing");
     }
+    usageRows.push(...claudeModelShareRows(body));
     const resetCreditDetails = parseClaudeResetCreditDetails(body);
     return stampPayload({
         resetCredits: resetCreditDetails.length > 0 ? resetCreditDetails.length : undefined,

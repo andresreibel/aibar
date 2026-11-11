@@ -286,7 +286,17 @@ describe("Claude partial current usage", () => {
                 ],
             },
             juniper_tide: { available: false },
+            limits: [
+                { kind: "weekly_all", percent: 17, resets_at: "2026-11-17T09:59:59+00:00", scope: null },
+                { kind: "weekly_scoped", percent: 3, resets_at: "2026-11-17T09:59:59+00:00", is_active: false,
+                    scope: { model: { id: null, display_name: "Fable" }, surface: null } },
+            ],
         });
+        expect(payload.usageRows?.map((row) => [row.label, row.percentage, row.pacing])).toEqual([
+            ["Session", 12, { expectedPercentage: expect.any(Number) }],
+            ["Weekly", 17, { expectedPercentage: expect.any(Number) }],
+            ["Fable (of weekly)", 3, undefined],
+        ]);
         expect(payload.resetCredits).toBe(3);
         expect(payload.resetCreditDetails?.map((credit) => credit.title)).toEqual([
             "Weekly reset", "Fable reset", "Fable reset",
