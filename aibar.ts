@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { accessSync, constants, readdirSync } from "node:fs";
+import { accessSync, constants, readdirSync, readlinkSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
@@ -32,8 +32,9 @@ const GROK_LOGIN_TIMEOUT_MS = 2 * 60 * 1000;
 
 const CLAUDE_CREDS_PATH = `${HOME}/.claude/.credentials.json`;
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
-const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?at_wall=1&cedar_ember=1&skip_spend=1";
 const CLAUDE_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
+const CLAUDE_CODE_FALLBACK_VERSION = "2.1.322";
 const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const CLAUDE_SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
@@ -49,6 +50,8 @@ const CLAUDE_MIN_BACKOFF_MS = 15 * 60 * 1000;
 // ~5-minute cadence: each exec prints the cached payload for the current
 // provider unless it has gone stale.
 const RENDER_CACHE_TTL_MS = 5 * 60 * 1000;
+// Anthropic's usage endpoint allows only a few calls per hour per token, shared with Claude Code.
+const CLAUDE_RENDER_CACHE_TTL_MS = 15 * 60 * 1000;
 const RENDER_CACHE_ERROR_TTL_MS = 30 * 1000;
 const MENU_BAR_ROWS_PATH = `${STATE_DIR}/menu-bar-rows.json`;
 
@@ -611,7 +614,9 @@ export async function loadFreshRenderCache(
     if (savedAtMs == null || !payload || !isRenderCacheCompatible(provider, payload)) {
         return null;
     }
-    const ttl = isErrorPayload(payload) ? RENDER_CACHE_ERROR_TTL_MS : RENDER_CACHE_TTL_MS;
+    const ttl = isErrorPayload(payload)
+        ? RENDER_CACHE_ERROR_TTL_MS
+        : provider == CLAUDE_PROVIDER ? CLAUDE_RENDER_CACHE_TTL_MS : RENDER_CACHE_TTL_MS;
     if (now - savedAtMs < 0 || now - savedAtMs > ttl) {
         return null;
     }
@@ -820,8 +825,7 @@ export function annotateCachedClaudePayload(payload: BarPayload, detail: string)
         ...payload,
         accessState: "stale",
         usageRows: payload.usageRows?.map((row) => ({ ...row, isCurrent: false })),
-        resetCredits: undefined,
-        resetCreditDetails: [],
+        resetCreditDetails: payload.resetCreditDetails ?? [],
         text: stripLegacyBarCountdown(payload.text),
         tooltip: `${compactLegacyTooltip(payload.tooltip)}\nStale · cached Anthropic usage\n${detail}`,
         class: mergeClasses(payload.class, "stale", "provider-claude"),
@@ -1174,7 +1178,10 @@ async function fetchCodexUsageViaOAuth(): Promise<CodexUsageSnapshot> {
 
 async function fetchCodexRateLimitsViaRpc(): Promise<JSONRecord> {
     return new Promise<JSONRecord>((resolve, reject) => {
-        const child = spawn(resolveCodexExecutable(), ["-s", "read-only", "-a", "never", "app-server"], {
+        const codexExecutable = resolveCodexExecutable();
+        const child = spawn(codexExecutable, ["-s", "read-only", "-a", "never", "app-server"], {
+            // The npm codex launcher runs through `env node`, and nvm's node sits beside it.
+            env: { ...process.env, PATH: `${dirname(codexExecutable)}:${process.env.PATH ?? ""}` },
             stdio: ["pipe", "pipe", "pipe"],
         });
 
@@ -1956,11 +1963,15 @@ async function fetchClaudePayload(): Promise<BarPayload> {
 
     const auth = await maybeRefreshClaudeToken(loaded);
 
+    // Anthropic only fills the reset-credit list for requests from the Claude Code CLI surface.
     const response = await fetch(CLAUDE_USAGE_URL, {
         signal: AbortSignal.timeout(PROVIDER_HTTP_TIMEOUT_MS),
         headers: {
+            Accept: "application/json, text/plain, */*",
             Authorization: `Bearer ${auth.accessToken}`,
             "anthropic-beta": "oauth-2025-04-20",
+            "User-Agent": `claude-cli/${claudeCodeVersion()} (external, cli)`,
+            "x-app": "cli",
         },
     });
 
@@ -2002,6 +2013,50 @@ async function fetchClaudePayload(): Promise<BarPayload> {
     return payload;
 }
 
+function claudeCodeVersion(): string {
+    try {
+        const version = readlinkSync(`${HOME}/.local/bin/claude`).split("/").pop() ?? "";
+        return /^\d+\.\d+\.\d+$/.test(version) ? version : CLAUDE_CODE_FALLBACK_VERSION;
+    } catch {
+        return CLAUDE_CODE_FALLBACK_VERSION;
+    }
+}
+
+function claudeResetCreditTitle(grant: JSONRecord): string {
+    const label = toStringValue(grant.label)?.trim() ?? "";
+    if (grant.type == "weekly") return "Weekly reset";
+    if (/fable/i.test(label)) return "Fable reset";
+    return label || "Reset credit";
+}
+
+export function parseClaudeResetCreditDetails(body: JSONRecord): ResetCreditDetail[] {
+    const details: ResetCreditDetail[] = [];
+    const cedar = readNestedRecord(body, "cedar_ember");
+    const grants = Array.isArray(cedar?.grants) ? cedar.grants : [];
+    for (const grant of grants) {
+        if (!isRecord(grant)) continue;
+        const resetsLeft = toNumber(grant.resets_left) ?? (grant.usable_now === true ? 1 : 0);
+        const title = claudeResetCreditTitle(grant);
+        const expiresAt = parseEpochSecondsFromIso(toStringValue(grant.ends_at));
+        for (let idx = 0; idx < resetsLeft; idx += 1) {
+            details.push({ title, expiresAt });
+        }
+    }
+    const juniper = readNestedRecord(body, "juniper_tide");
+    if (juniper?.available === true) {
+        details.push({
+            title: "Weekly session reset",
+            expiresAt: parseEpochSecondsFromIso(toStringValue(juniper.weekly_resets_at)),
+        });
+    }
+    return details.sort((left, right) => {
+        if (left.expiresAt == null) {
+            return right.expiresAt == null ? 0 : 1;
+        }
+        return right.expiresAt == null ? -1 : left.expiresAt - right.expiresAt;
+    });
+}
+
 export function claudeUsageToPayload(body: JSONRecord): BarPayload {
     const usageRows: UsageRow[] = [];
     const unavailableUsageLabels: string[] = [];
@@ -2032,7 +2087,10 @@ export function claudeUsageToPayload(body: JSONRecord): BarPayload {
     if (!primary) {
         throw new Error("Claude usage percentages missing");
     }
+    const resetCreditDetails = parseClaudeResetCreditDetails(body);
     return stampPayload({
+        resetCredits: resetCreditDetails.length > 0 ? resetCreditDetails.length : undefined,
+        resetCreditDetails,
         text: addProviderBadge(primaryText, "A"),
         tooltip: tooltipLines.join("\n"),
         accessState: "available",

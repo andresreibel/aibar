@@ -75,7 +75,7 @@ public struct AIBarResetCredit: Decodable, Equatable, Sendable {
     public var expiryText: String {
         guard let expiresAt, expiresAt.isFinite else { return "Expiry unavailable" }
         let expiry = Date(timeIntervalSince1970: expiresAt)
-            .formatted(.dateTime.month(.abbreviated).day().hour().minute())
+            .formatted(.dateTime.year(.twoDigits).month(.abbreviated).day().hour().minute())
         return "Expires \(expiry)"
     }
 

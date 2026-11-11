@@ -322,7 +322,7 @@ private extension View {
 
 private struct AIBarMenu: View {
     @ObservedObject var model: AIBarModel
-    @State private var showsResetCreditExpiries = false
+    @State private var expandedResetCreditProviders: Set<AIBarProvider> = []
     @State private var showsUsageGuide = false
     @State private var showsNotifications = false
     @AppStorage("dismissedNotificationSignature") private var dismissedNotificationSignature = ""
@@ -637,7 +637,11 @@ private struct AIBarMenu: View {
                         Button {
                             if !payload.resetCreditDetails.isEmpty {
                                 withAnimation(.easeInOut(duration: 0.15)) {
-                                    showsResetCreditExpiries.toggle()
+                                    if expandedResetCreditProviders.contains(provider) {
+                                        expandedResetCreditProviders.remove(provider)
+                                    } else {
+                                        expandedResetCreditProviders.insert(provider)
+                                    }
                                 }
                             }
                         } label: {
@@ -657,7 +661,7 @@ private struct AIBarMenu: View {
                                         } ?? Color.primary
                                     )
                                 if !payload.resetCreditDetails.isEmpty {
-                                    Image(systemName: showsResetCreditExpiries ? "chevron.up" : "chevron.down")
+                                    Image(systemName: expandedResetCreditProviders.contains(provider) ? "chevron.up" : "chevron.down")
                                         .foregroundStyle(
                                             creditUrgency.map {
                                                 noticeColor($0 == .critical ? .critical : .warning)
@@ -675,7 +679,7 @@ private struct AIBarMenu: View {
                                 : payload.resetCreditDetails.map(\.displayText).joined(separator: "\n\n")
                         )
 
-                        if showsResetCreditExpiries {
+                        if expandedResetCreditProviders.contains(provider) {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(Array(payload.resetCreditDetails.enumerated()), id: \.offset) { _, credit in
                                     let urgency = aiBarExpiryUrgency(expiresAt: credit.expiresAt)

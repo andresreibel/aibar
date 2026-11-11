@@ -27,6 +27,7 @@ import {
     nextProvider,
     normalizeBarPayload,
     parseCodexOAuthUsage,
+    parseClaudeResetCreditDetails,
     parseCodexResetCreditDetails,
     parseCursorMonthlyUsage,
     parseGrokUsage,
@@ -269,6 +270,29 @@ describe("Claude partial current usage", () => {
         expect(payload.percentageLabel).toBe("Session");
         expect(payload.unavailableUsageLabels).toEqual([]);
         expect(() => claudeUsageToPayload({})).toThrow("Claude usage percentages missing");
+    });
+
+    test("lists Claude reset grants by expiry and counts them", () => {
+        const payload = claudeUsageToPayload({
+            five_hour: session,
+            seven_day: weekly,
+            cedar_ember: {
+                grants: [
+                    { label: "New model launch: one Fable reset", type: "full", resets_left: 2, usable_now: true,
+                        ends_at: "2027-03-09T07:59:00+00:00" },
+                    { label: "One full limit reset (November 2026)", type: "weekly", resets_left: 1, usable_now: true,
+                        ends_at: "2026-12-10T22:00:00+00:00" },
+                    { label: "Spent", type: "full", resets_left: 0, usable_now: false },
+                ],
+            },
+            juniper_tide: { available: false },
+        });
+        expect(payload.resetCredits).toBe(3);
+        expect(payload.resetCreditDetails?.map((credit) => credit.title)).toEqual([
+            "Weekly reset", "Fable reset", "Fable reset",
+        ]);
+        expect(payload.resetCreditDetails?.[0].expiresAt).toBe(Date.parse("2026-12-10T22:00:00Z") / 1000);
+        expect(parseClaudeResetCreditDetails({ cedar_ember: { eligible: false, grants: [] } })).toEqual([]);
     });
 });
 
@@ -600,11 +624,13 @@ describe("current usage only", () => {
         const now = Date.now();
         const payload = { text: "A", tooltip: "Week 42%", accessState: "available" };
         try {
-            for (const age of [0, 300_000, 300_001, -1]) {
+            for (const age of [0, 300_001, 900_000, 900_001, -1]) {
                 await writeFile(cachePath, JSON.stringify({ savedAtMs: now - age, payload }));
                 expect(await loadFreshRenderCache("claude", cachePath, now))
-                    .toEqual(age >= 0 && age <= 300_000 ? payload : null);
+                    .toEqual(age >= 0 && age <= 900_000 ? payload : null);
             }
+            await writeFile(cachePath, JSON.stringify({ savedAtMs: now - 300_001, payload }));
+            expect(await loadFreshRenderCache("grok", cachePath, now)).toBeNull();
         } finally {
             await rm(directory, { recursive: true, force: true });
         }

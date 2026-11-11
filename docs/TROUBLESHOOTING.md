@@ -63,7 +63,11 @@ Anthropic does not document the internal OAuth usage endpoint or an individual s
 
 ## Cached Claude usage
 
-During temporary provider failures or Claude `429` backoff, AIBar keeps the provider card and name, hides stale usage rows and removes the affected menu-bar counter. If another quota is current, it stays visible. Open **Notifications** for the **Usage unavailable** notice. Unavailable individual quotas also appear there, without hiding other current quotas. A successful refresh restores usage and removes the notice. Normal five-minute polling and render caching remain; last-good fallback data is never displayed after a failed fetch. Cache and backoff state live under `~/.codex/aibar/`.
+During temporary provider failures, AIBar keeps the provider card and name, hides stale usage rows and removes the affected menu-bar counter. If another quota is current, it stays visible. Open **Notifications** for the **Usage unavailable** notice. Unavailable individual quotas also appear there, without hiding other current quotas. A successful refresh restores usage and removes the notice. Cache and backoff state live under `~/.codex/aibar/`.
+
+Anthropic's `/api/oauth/usage` endpoint allows only a few calls per hour per token, and Claude Code sessions share that allowance. AIBar calls it at most every 15 minutes. On a `429` it waits for the full `retry-after`, often about an hour, and keeps the last good usage and reset credits on the card with "Rate limited · last usage reading <time>". The reset-credit list (`cedar_ember`) is only returned for Claude Code CLI requests, so AIBar sends the CLI `User-Agent` and `x-app: cli` headers on that one usage call.
+
+OpenAI reset-credit details come from `codex app-server`. The npm `codex` launcher runs through `env node`, so AIBar adds the launcher's directory to `PATH`; without it, the app launched from Finder gets no reset details.
 
 ## Reset credit expiry notices
 
