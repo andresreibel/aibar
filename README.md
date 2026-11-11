@@ -83,7 +83,7 @@ On Linux, pass `--bashrc` to also install the short `aibar` shell command:
 
 Requirements:
 
-- macOS 14 or newer.
+- macOS 15 or newer.
 - Xcode Command Line Tools / Swift.
 - Bun.
 - `librsvg` for the app icon build.

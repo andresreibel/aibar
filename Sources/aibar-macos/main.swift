@@ -365,6 +365,14 @@ private struct AIBarMenu: View {
                 }
                 Spacer()
                 Button {
+                    NSApp.terminate(nil)
+                } label: {
+                    Image(systemName: "power")
+                }
+                .buttonStyle(.plain)
+                .frame(width: 24, height: 24)
+                .help("Quit AIBar")
+                Button {
                     Task { await model.refresh() }
                 } label: {
                     if model.isRefreshing {
@@ -498,7 +506,8 @@ private struct AIBarMenu: View {
             let unavailableQuotas = payload.unavailableUsageLabels.isEmpty
                 ? details.unavailableQuotas
                 : payload.unavailableUsageLabels.map(compactLabel)
-            let missingQuotas = Array(Set(unavailableQuotas + payload.staleUsageLabels.map(compactLabel))).sorted()
+            let staleQuotas = payload.tooltip.contains("Rate limited") ? [] : payload.staleUsageLabels.map(compactLabel)
+            let missingQuotas = Array(Set(unavailableQuotas + staleQuotas)).sorted()
             for quota in missingQuotas {
                 notices.append(DashboardNotice(
                     id: "quota-\(provider.rawValue)-\(quota)",
@@ -611,8 +620,9 @@ private struct AIBarMenu: View {
             }
 
             if let payload {
-                if !payload.currentUsageRows.isEmpty || payload.resetCredits != nil {
-                    let rows = payload.currentUsageRows
+                let isRateLimited = payload.tooltip.contains("Rate limited")
+                let rows = isRateLimited && payload.currentUsageRows.isEmpty ? payload.usageRows : payload.currentUsageRows
+                if !rows.isEmpty || payload.resetCredits != nil {
                     let showsSelector = rows.count > 1
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                         usageRow(
@@ -688,11 +698,21 @@ private struct AIBarMenu: View {
 
                     Spacer(minLength: 0)
 
-                    if let updatedTime = payload.updatedTimeText {
+                    if isRateLimited {
+                        Text("Rate limited · last usage reading \(payload.updatedTimeText ?? "unknown")")
+                            .font(.caption2)
+                            .foregroundStyle(noticeColor(.warning))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let updatedTime = payload.updatedTimeText {
                         Text("Updated \(updatedTime)")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
+                } else if isRateLimited {
+                    Text("\(provider.displayName) rate limit. Will try again shortly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -1109,5 +1129,6 @@ private struct AIBarApp: App {
         Settings {
             EmptyView()
         }
+        .defaultLaunchBehavior(.suppressed)
     }
 }
