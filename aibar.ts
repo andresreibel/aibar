@@ -2067,7 +2067,7 @@ function claudeModelShareRows(body: JSONRecord): UsageRow[] {
         const rawPercentage = toNumber(limit.percent);
         if (!name || rawPercentage == null) return [];
         return [{
-            label: `${name} (of weekly)`,
+            label: `${name} (% of weekly limit)`,
             percentage: clamp(Math.round(rawPercentage), 0, 100),
             resetText: formatCountdown(parseEpochSecondsFromIso(toStringValue(limit.resets_at))),
             severity: "normal",

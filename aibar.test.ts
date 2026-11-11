@@ -295,7 +295,7 @@ describe("Claude partial current usage", () => {
         expect(payload.usageRows?.map((row) => [row.label, row.percentage, row.pacing])).toEqual([
             ["Session", 12, { expectedPercentage: expect.any(Number) }],
             ["Weekly", 17, { expectedPercentage: expect.any(Number) }],
-            ["Fable (of weekly)", 3, undefined],
+            ["Fable (% of weekly limit)", 3, undefined],
         ]);
         expect(payload.resetCredits).toBe(3);
         expect(payload.resetCreditDetails?.map((credit) => credit.title)).toEqual([
